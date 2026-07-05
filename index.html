@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>5x5 Card Puzzle</title>
+<style>
+  /* ===== 전체 화면을 1280x720 고정 비율로 고정 ===== */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden; /* 1280x720 밖으로 내용이 넘쳐도 스크롤바가 생기지 않도록 */
+    background: #111; /* 1280x720 바깥 여백 색 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 실제 게임이 담기는 고정 크기 컨테이너 (1280 x 720) */
+  #app {
+    width: 1280px;
+    height: 720px;
+    background: #222;
+    color: #eee;
+    font-family: sans-serif;
+    position: relative;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  /* 시작 화면 / 게임 화면 공통: #app 전체를 채우고 가운데 정렬 */
+  #start-screen, #game-screen {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative; /* 다시 시작 버튼을 우측 하단에 절대배치하기 위한 기준 */
+  }
+
+  /* ===== 시작(규칙 안내) 화면 ===== */
+  #start-screen h1 {
+    margin: 0 0 10px 0;
+    font-size: 26px;
+  }
+  #rules-box {
+    width: 620px;
+    max-height: 480px;   /* 720px 안에 확실히 들어가도록 상한을 두고, */
+    overflow-y: auto;    /* 혹시 넘치면 내부 스크롤로 처리 (바깥 레이아웃은 유지) */
+    background: #2c2c2c;
+    border-radius: 8px;
+    padding: 18px 28px;
+    line-height: 1.55;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+  #rules-box h3 {
+    margin-top: 14px;
+    margin-bottom: 5px;
+    color: #ffd166;
+  }
+  #rules-box h3:first-child {
+    margin-top: 0;
+  }
+  #rules-box ul {
+    margin: 4px 0;
+    padding-left: 20px;
+  }
+  #start-button {
+    margin-top: 18px;
+    padding: 10px 36px;
+    font-size: 17px;
+    font-weight: bold;
+    background: #ffd166;
+    color: #222;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #start-button:hover {
+    background: #ffdd8a;
+  }
+
+  #score-board {
+    margin: 8px 0;
+    font-size: 18px;
+  }
+
+  #game-screen h2 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  /* =========================================================
+     보드 레이아웃 관련 치수
+     - CELL: 카드 한 칸의 크기(px)
+     - GAP : 칸 사이 간격(px)
+     - PAD : 보드 안쪽 여백(px)
+     - 아래 JS의 CELL/GAP/PAD 상수와 반드시 값이 일치해야
+       카드 요소의 translate 좌표 계산이 배경 칸과 맞아떨어진다.
+  ========================================================= */
+
+  /* 5x5 보드 컨테이너 - 배경칸(bg) + 카드 레이어(cards) + 미리보기(preview)를
+     겹쳐 올리는 기준 컨테이너 (position: relative) */
+  #board {
+    position: relative;
+    width: 430px;  /* PAD*2 + 5*CELL + 4*GAP = 10 + 400 + 20 (JS 상수와 반드시 일치) */
+    height: 430px;
+    background: #333;
+    border-radius: 6px;
+  }
+
+  /* 항상 고정되어 있는 배경 칸 (빈 칸 표시용, 애니메이션 없음) */
+  .bg-cell {
+    position: absolute;
+    width: 80px;
+    height: 80px;
+    background: #444;
+    border-radius: 4px;
+  }
+
+  /* 실제 카드 (숫자+문양) - transform으로 위치를 옮기며,
+     transform/opacity 변화에 transition을 걸어두어
+     이동/생성/제거 시 부드러운 애니메이션이 보이게 한다. */
+  .card {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80px;
+    height: 80px;
+    background: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: bold;
+    border-radius: 4px;
+    user-select: none;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+    will-change: transform, opacity;
+  }
+
+  /* 문양별 색 구분 (최소한의 시각적 구분용) */
+  .suit-red { color: #ff6b6b; }
+  .suit-black { color: #f0f0f0; }
+
+  /* 다음 카드가 생성될 예정 위치 미리보기 (투명도 30%) */
+  .preview-cell {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80px;
+    height: 80px;
+    border-radius: 4px;
+    background: rgba(255, 255, 0, 0.3); /* 노란색 30% 투명도 하이라이트 */
+    display: none; /* 기본은 숨김. JS에서 위치 지정 후 표시 */
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.4);
+    pointer-events: none;
+    transition: transform 0.18s ease;
+  }
+
+  #controls {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+  }
+  #controls button {
+    width: 44px;
+    height: 44px;
+    font-size: 16px;
+  }
+
+  /* ===== 다시 시작 버튼 (게임 화면 우측 하단 고정) ===== */
+  #restart-button {
+    position: absolute;
+    right: 24px;
+    bottom: 24px;
+    padding: 10px 22px;
+    font-size: 15px;
+    font-weight: bold;
+    background: #555;
+    color: #eee;
+    border: 1px solid #777;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #restart-button:hover {
+    background: #666;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===================== 시작(규칙 안내) 화면 ===================== -->
+  <div id="start-screen">
+    <h1>5x5 Card Puzzle</h1>
+    <div id="rules-box">
+      <h3>제거 및 점수 규칙</h3>
+      <ul>
+        <li>상하좌우로 연결된 3칸의 숫자가 모두 같으면 제거됩니다. (예: 2-2-2)</li>
+        <li>상하좌우로 연결된 3칸의 숫자가 연속(오름차순/내림차순)이면 제거됩니다. (예: 1-2-3)</li>
+        <li>문양은 제거 조건에 영향을 주지 않습니다.</li>
+        <li>제거된 카드 개수만큼 점수가 올라갑니다.</li>
+      </ul>
+    </div>
+    <button id="start-button" onclick="startGame()">게임 시작</button>
+  </div>
+
+  <!-- ===================== 실제 게임 화면 ===================== -->
+  <div id="game-screen" style="display: none;">
+    <h2>5x5 Card Puzzle</h2>
+    <div id="score-board">Score: <span id="score">0</span></div>
+
+    <!-- 보드: 배경칸(board-bg) / 카드(board-cards) / 미리보기(preview-cell) 3개 레이어 -->
+    <div id="board">
+      <div id="board-bg"></div>
+      <div id="board-cards"></div>
+      <div id="preview-cell" class="preview-cell">?</div>
+    </div>
+
+    <!-- 방향키 대체용 버튼: 위/아래/좌/우 순서로 일렬 배치 -->
+    <div id="controls">
+      <button onclick="move('up')">↑</button>
+      <button onclick="move('down')">↓</button>
+      <button onclick="move('left')">←</button>
+      <button onclick="move('right')">→</button>
+    </div>
+
+    <!-- 다시 시작 버튼: 우측 하단 고정 -->
+    <button id="restart-button" onclick="restartGame()">다시 시작</button>
+  </div>
+
+</div>
+
+
+<script>
+/* =========================================================
+   전역 상태
+   =========================================================
+   board: 5x5 2차원 배열. 각 칸은 null(빈칸) 또는
+          { id, number: 1~3, suit: '♠'|'♥'|'♦'|'♣' } 객체.
+          id는 카드마다 부여되는 고유 값으로, 같은 카드가
+          이동해도 id는 유지되기 때문에 이 id를 기준으로
+          DOM 요소를 재사용하며 부드럽게 슬라이드시킬 수 있다.
+   score: 누적 점수
+========================================================= */
+const SIZE = 5;
+const SUITS = ['♠', '♥', '♦', '♣'];
+const RED_SUITS = ['♥', '♦']; // 빨간 문양 구분용(시각적 표시만)
+
+// 보드 픽셀 치수 (CSS의 .card / .bg-cell / #board 크기와 반드시 일치해야 함)
+const CELL = 80;
+const GAP = 5;
+const PAD = 5;
+
+// 애니메이션 단계별 소요 시간(ms). CSS transition 시간과 맞춰준다.
+const SLIDE_MS = 180;  // 이동(슬라이드) 애니메이션 시간
+const SPAWN_MS = 180;  // 새 카드 생성(페이드인) 애니메이션 시간
+const REMOVE_MS = 160; // 매치된 카드 제거(축소/페이드아웃) 애니메이션 시간
+
+let board = [];
+let score = 0;
+let cardIdCounter = 0; // 카드 고유 id 발급용 카운터
+
+// 카드 id -> 실제 DOM 엘리먼트 매핑. 이동 시 이 엘리먼트들의
+// transform만 갱신하여 슬라이드 애니메이션을 만든다.
+let domCards = new Map();
+
+// 다음 번에 카드가 생성될 예정인 좌표 { r, c } (없으면 null)
+let nextSpawnPos = null;
+
+// 게임이 실제로 시작되었는지 여부 (시작 화면에서는 입력을 무시)
+let gameStarted = false;
+
+// 현재 이동/생성/제거 애니메이션이 진행 중인지 여부.
+// 애니메이션 도중 추가 입력을 막아 상태가 꼬이는 것을 방지한다.
+let isAnimating = false;
+
+// 진행 중인 애니메이션 시퀀스를 식별하는 토큰.
+// "다시 시작"을 누르면 이 값을 증가시켜서, 이미 예약된
+// setTimeout 콜백들이 낡은(stale) 시퀀스임을 감지하고 무시하게 만든다.
+let moveToken = 0;
+
+/* =========================================================
+   pixelPos(r, c)
+   - 격자 좌표(r, c)를 보드 내부의 실제 픽셀 좌표(x, y)로 변환.
+   - .card, .bg-cell, .preview-cell 요소들은 모두 이 좌표를
+     기준으로 transform: translate(x, y)를 적용해 배치된다.
+========================================================= */
+function pixelPos(r, c) {
+  return {
+    x: PAD + c * (CELL + GAP),
+    y: PAD + r * (CELL + GAP),
+  };
+}
+
+/* =========================================================
+   initBoard()
+   - 보드를 5x5 null 배열로 초기화하고 점수를 0으로 리셋.
+   - 배경 격자(bg-cell)를 (아직 없다면) 한 번 그려둔다.
+   - 카드 DOM을 모두 비우고, 시작 카드 2개를 생성한다.
+   - 다음 스폰 위치를 예약하고 미리보기를 표시한다.
+========================================================= */
+function initBoard() {
+  board = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
+  score = 0;
+
+  ensureBackgroundGrid(); // 배경 칸은 최초 1회만 생성됨
+  clearAllCardElements(); // 이전 게임의 카드 DOM 잔여물 제거 (다시 시작 대응)
+
+  // 시작할 때 카드 2개를 랜덤 배치 (2048처럼 시작 타일 제공)
+  spawnCard();
+  spawnCard();
+  createMissingCardElements(); // 방금 생성된 카드들의 DOM 요소를 만들어줌
+
+  // 다음(=이번 첫 이동 이후) 카드가 생성될 위치를 미리 예약하고 표시
+  pickNextSpawnPreview();
+  setPreviewVisible(nextSpawnPos);
+
+  updateScoreDisplay();
+}
+
+/* =========================================================
+   랜덤 카드 생성 헬퍼
+   - 숫자 1~3, 문양 4종 중 랜덤 선택
+   - 카드마다 고유 id를 부여한다 (애니메이션에서 카드를 추적하기 위함)
+========================================================= */
+function createRandomCard() {
+  const number = Math.floor(Math.random() * 3) + 1; // 1~3
+  const suit = SUITS[Math.floor(Math.random() * SUITS.length)];
+  cardIdCounter += 1;
+  return { id: cardIdCounter, number, suit };
+}
+
+/* =========================================================
+   getEmptyCells()
+   - 현재 보드에서 비어있는 칸 좌표들을 모두 반환
+========================================================= */
+function getEmptyCells() {
+  const emptyCells = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (board[r][c] === null) {
+        emptyCells.push({ r, c });
+      }
+    }
+  }
+  return emptyCells;
+}
+
+/* =========================================================
+   pickNextSpawnPreview()
+   - 현재 보드의 빈 칸들 중 하나를 무작위로 골라
+     "다음 번 카드가 생성될 위치"로 예약해둔다.
+   - 실제 카드는 아직 생성하지 않고 좌표만 저장한다.
+   - 빈 칸이 없으면 null로 설정 (미리보기 없음).
+========================================================= */
+function pickNextSpawnPreview() {
+  const emptyCells = getEmptyCells();
+
+  if (emptyCells.length === 0) {
+    nextSpawnPos = null;
+    return;
+  }
+
+  nextSpawnPos = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+}
+
+/* =========================================================
+   spawnCard()
+   - 미리 예약해둔 nextSpawnPos 위치에 새 카드 데이터를 생성한다.
+   - 이 함수는 board 데이터만 변경하며, 실제 DOM 요소 생성은
+     createMissingCardElements()가 담당한다 (데이터/화면 분리).
+   - 예약 위치가 유효하지 않으면 현재 빈 칸 중 무작위로 대체한다.
+   - 빈 칸이 전혀 없으면 아무 것도 하지 않는다.
+========================================================= */
+function spawnCard() {
+  let target = null;
+
+  if (nextSpawnPos !== null && board[nextSpawnPos.r][nextSpawnPos.c] === null) {
+    target = nextSpawnPos;
+  } else {
+    const emptyCells = getEmptyCells();
+    if (emptyCells.length === 0) return; // 더 이상 놓을 자리가 없음
+    target = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  }
+
+  board[target.r][target.c] = createRandomCard();
+}
+
+/* =========================================================
+   move(direction)
+   - direction: 'left' | 'right' | 'up' | 'down'
+   - 2048 방식으로 해당 방향 끝까지 카드를 밀어붙인다 (merge 없음).
+   - 애니메이션은 3단계로 진행된다:
+     1) 슬라이드: 카드들이 이동한 새 위치로 부드럽게 이동
+     2) 스폰: 슬라이드가 끝난 뒤 새 카드가 빈 칸에 페이드인
+     3) 제거: 스폰 직후 매치 검사를 하여, 매치된 카드는
+        축소/페이드아웃 애니메이션 후 실제로 제거됨
+   - 애니메이션 도중에는 추가 입력을 막는다 (isAnimating).
+========================================================= */
+function move(direction) {
+  if (!gameStarted || isAnimating) return;
+
+  // 이동 전 상태를 문자열로 저장해서, 이동 후와 비교(변화 여부 판단)
+  const before = JSON.stringify(board);
+
+  if (direction === 'left') {
+    for (let r = 0; r < SIZE; r++) {
+      board[r] = compactLine(board[r]);
+    }
+  } else if (direction === 'right') {
+    for (let r = 0; r < SIZE; r++) {
+      const reversed = board[r].slice().reverse();
+      const compacted = compactLine(reversed);
+      board[r] = compacted.reverse();
+    }
+  } else if (direction === 'up') {
+    for (let c = 0; c < SIZE; c++) {
+      const column = getColumn(c);
+      const compacted = compactLine(column);
+      setColumn(c, compacted);
+    }
+  } else if (direction === 'down') {
+    for (let c = 0; c < SIZE; c++) {
+      const column = getColumn(c).slice().reverse();
+      const compacted = compactLine(column);
+      setColumn(c, compacted.reverse());
+    }
+  } else {
+    console.warn('알 수 없는 방향:', direction);
+    return;
+  }
+
+  const after = JSON.stringify(board);
+
+  // 실제로 무언가 움직였을 때만 애니메이션 + 스폰 + 매치 체크 진행
+  if (before === after) return;
+
+  isAnimating = true;
+  const token = ++moveToken; // 이번 이동 시퀀스를 식별하는 토큰
+
+  // 이동 중에는 미리보기를 잠시 숨긴다 (곧 새 카드가 채워질 자리이므로)
+  setPreviewVisible(null);
+
+  // ---- 1단계: 슬라이드 애니메이션 ----
+  // board는 이미 새 위치로 갱신되었으므로, 각 카드 DOM의 transform만
+  // 새 좌표로 옮겨주면 CSS transition에 의해 자연스럽게 슬라이드된다.
+  syncCardPositions();
+
+  setTimeout(() => {
+    if (token !== moveToken) return; // 도중에 "다시 시작" 등으로 무효화됨
+
+    // ---- 2단계: 새 카드 스폰 ----
+    spawnCard();
+    createMissingCardElements(); // 새로 생긴 카드에 대해서만 DOM 생성 + 페이드인
+
+    setTimeout(() => {
+      if (token !== moveToken) return;
+
+      // ---- 3단계: 매치 검사 및 제거 ----
+      const matched = checkMatches();
+
+      if (matched.length > 0) {
+        // 제거될 카드들에 축소/페이드아웃 애니메이션 적용
+        matched.forEach(({ r, c }) => {
+          const card = board[r][c];
+          if (card) markCardRemoving(card.id);
+        });
+        removeCards(matched); // board 데이터에서는 즉시 제거(null 처리) + 점수 반영
+        updateScoreDisplay();
+      }
+
+      // 다음 이동을 위한 스폰 위치 재예약
+      pickNextSpawnPreview();
+
+      setTimeout(() => {
+        if (token !== moveToken) return;
+        setPreviewVisible(nextSpawnPos);
+        isAnimating = false;
+      }, matched.length > 0 ? REMOVE_MS : 0);
+
+    }, SPAWN_MS);
+  }, SLIDE_MS);
+}
+
+/* =========================================================
+   compactLine(line)
+   - 길이 SIZE짜리 1차원 배열(행 또는 열)을 받아서
+   - null이 아닌 카드들을 앞쪽으로 밀착시키고
+   - 나머지 뒤쪽 칸은 null로 채운 새 배열을 반환한다.
+========================================================= */
+function compactLine(line) {
+  const cards = line.filter(cell => cell !== null);
+  const emptiesNeeded = SIZE - cards.length;
+  const fill = Array(emptiesNeeded).fill(null);
+  return cards.concat(fill);
+}
+
+/* =========================================================
+   열(column) 관련 헬퍼
+========================================================= */
+function getColumn(colIndex) {
+  const column = [];
+  for (let r = 0; r < SIZE; r++) {
+    column.push(board[r][colIndex]);
+  }
+  return column;
+}
+
+function setColumn(colIndex, columnData) {
+  for (let r = 0; r < SIZE; r++) {
+    board[r][colIndex] = columnData[r];
+  }
+}
+
+/* =========================================================
+   checkMatches()
+   - 보드 전체를 스캔하여 제거 대상 좌표들을 찾는다.
+   - 규칙:
+     1) 가로/세로로 연속된 3칸의 숫자가 모두 같으면 매치
+     2) 가로/세로로 연속된 3칸의 숫자가 오름차순 또는
+        내림차순으로 1씩 연속되면 매치 (예: 1-2-3, 3-2-1)
+     - 문양은 조건에 영향을 주지 않는다.
+   - 반환값: 제거해야 할 좌표 배열 [{r, c}, ...] (중복 없음)
+========================================================= */
+function checkMatches() {
+  const toRemove = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
+
+  // ---- 가로 방향 검사 ----
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c <= SIZE - 3; c++) {
+      const a = board[r][c];
+      const b = board[r][c + 1];
+      const d = board[r][c + 2];
+      if (isTripleMatch(a, b, d)) {
+        toRemove[r][c] = true;
+        toRemove[r][c + 1] = true;
+        toRemove[r][c + 2] = true;
+      }
+    }
+  }
+
+  // ---- 세로 방향 검사 ----
+  for (let c = 0; c < SIZE; c++) {
+    for (let r = 0; r <= SIZE - 3; r++) {
+      const a = board[r][c];
+      const b = board[r + 1][c];
+      const d = board[r + 2][c];
+      if (isTripleMatch(a, b, d)) {
+        toRemove[r][c] = true;
+        toRemove[r + 1][c] = true;
+        toRemove[r + 2][c] = true;
+      }
+    }
+  }
+
+  const matchedCoords = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (toRemove[r][c]) {
+        matchedCoords.push({ r, c });
+      }
+    }
+  }
+
+  return matchedCoords;
+}
+
+/* =========================================================
+   isTripleMatch(a, b, c)
+   - 3개의 카드(a, b, c)가 매치 조건을 만족하는지 검사.
+   - 셋 중 하나라도 null(빈칸)이면 매치 불가.
+========================================================= */
+function isTripleMatch(a, b, c) {
+  if (a === null || b === null || c === null) return false;
+
+  const n1 = a.number;
+  const n2 = b.number;
+  const n3 = c.number;
+
+  const sameNumber = (n1 === n2 && n2 === n3);
+  const ascending = (n2 - n1 === 1) && (n3 - n2 === 1);
+  const descending = (n1 - n2 === 1) && (n2 - n3 === 1);
+
+  return sameNumber || ascending || descending;
+}
+
+/* =========================================================
+   removeCards(coords)
+   - checkMatches()가 찾아낸 좌표들의 카드를 board 데이터에서
+     실제로 제거(null 처리)한다.
+   - DOM 상의 제거 애니메이션(markCardRemoving)은 move()에서
+     이 함수를 호출하기 "직전"에 이미 걸어두었으므로, 여기서는
+     데이터 정합성과 점수 반영만 책임진다.
+========================================================= */
+function removeCards(coords) {
+  coords.forEach(({ r, c }) => {
+    board[r][c] = null;
+  });
+
+  score += coords.length;
+}
+
+/* =========================================================
+   ---------- 화면(DOM) 렌더링 관련 함수들 ----------
+   기존의 "매번 grid를 통째로 새로 그리는" 방식 대신,
+   카드마다 고유 id를 가진 DOM 요소를 유지하면서
+   transform(translate)만 갱신하는 방식으로 애니메이션을 구현한다.
+========================================================= */
+
+/* ensureBackgroundGrid()
+   - 5x5 배경 칸(.bg-cell)을 최초 1회만 생성한다.
+   - 배경은 움직이지 않으므로 매 이동마다 다시 그릴 필요가 없다. */
+function ensureBackgroundGrid() {
+  const bgLayer = document.getElementById('board-bg');
+  if (bgLayer.childElementCount > 0) return; // 이미 생성됨
+
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const bg = document.createElement('div');
+      bg.className = 'bg-cell';
+      const { x, y } = pixelPos(r, c);
+      bg.style.transform = `translate(${x}px, ${y}px)`;
+      bgLayer.appendChild(bg);
+    }
+  }
+}
+
+/* clearAllCardElements()
+   - 카드 레이어의 모든 DOM 요소와 domCards 맵을 초기화한다.
+   - "다시 시작" 시 이전 게임의 카드 잔여물을 없애기 위해 사용. */
+function clearAllCardElements() {
+  const cardsLayer = document.getElementById('board-cards');
+  cardsLayer.innerHTML = '';
+  domCards.clear();
+}
+
+/* createCardElement(card, r, c)
+   - 새 카드에 대한 DOM 요소를 생성하여 (r, c) 위치에 배치하고,
+     opacity/scale이 0에서 1로 커지는 페이드인 애니메이션을 건다.
+   - domCards 맵에 등록해서 이후 위치 갱신/제거에 사용한다. */
+function createCardElement(card, r, c) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.textContent = card.number + card.suit;
+  el.classList.add(RED_SUITS.includes(card.suit) ? 'suit-red' : 'suit-black');
+
+  const { x, y } = pixelPos(r, c);
+
+  // 초기 상태: 살짝 작고 투명한 상태로 시작 (아직 transition 미적용)
+  el.style.transition = 'none';
+  el.style.transform = `translate(${x}px, ${y}px) scale(0.4)`;
+  el.style.opacity = '0';
+
+  document.getElementById('board-cards').appendChild(el);
+  domCards.set(card.id, el);
+
+  // 다음 프레임에 transition을 되살리고 목표 상태(scale 1, opacity 1)로
+  // 전환시켜서 "팝인" 애니메이션이 실제로 보이게 만든다.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      el.style.transition = 'transform 0.18s ease, opacity 0.18s ease';
+      el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
+      el.style.opacity = '1';
+    });
+  });
+}
+
+/* createMissingCardElements()
+   - board 데이터를 훑어서, 아직 DOM 요소가 없는 카드(id 기준)를
+     찾아 createCardElement()로 생성한다.
+   - spawnCard() 이후 새로 생긴 카드의 DOM을 만드는 용도로 사용. */
+function createMissingCardElements() {
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const card = board[r][c];
+      if (card !== null && !domCards.has(card.id)) {
+        createCardElement(card, r, c);
+      }
+    }
+  }
+}
+
+/* syncCardPositions()
+   - board 데이터를 훑어서, 이미 존재하는 카드 DOM 요소들의
+     transform을 현재 위치(r, c)에 맞춰 갱신한다.
+   - .card에는 transform에 transition이 걸려 있으므로,
+     이 값만 바꿔주면 자동으로 슬라이드 애니메이션이 재생된다. */
+function syncCardPositions() {
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const card = board[r][c];
+      if (card === null) continue;
+
+      const el = domCards.get(card.id);
+      if (!el) continue; // 아직 DOM이 없는(=새로 생성 예정인) 카드는 여기서 건너뜀
+
+      const { x, y } = pixelPos(r, c);
+      el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
+    }
+  }
+}
+
+/* markCardRemoving(id)
+   - 매치되어 제거될 카드에 축소 + 페이드아웃 애니메이션을 걸고,
+     transition이 끝난 뒤 실제로 DOM에서 제거한다. */
+function markCardRemoving(id) {
+  const el = domCards.get(id);
+  if (!el) return;
+
+  // 현재 transform에서 위치(translate) 부분은 유지하고 scale만 줄인다.
+  const currentTransform = el.style.transform || '';
+  const translatePart = currentTransform.replace(/scale\([^)]*\)/, '').trim();
+  el.style.transform = `${translatePart} scale(0.3)`;
+  el.style.opacity = '0';
+
+  domCards.delete(id); // 더 이상 위치 갱신 대상이 아니므로 맵에서 먼저 제거
+
+  setTimeout(() => {
+    el.remove();
+  }, REMOVE_MS);
+}
+
+/* setPreviewVisible(pos)
+   - pos가 null이면 미리보기 칸을 숨기고,
+   - pos가 있으면 해당 좌표로 옮기면서 보여준다. */
+function setPreviewVisible(pos) {
+  const previewEl = document.getElementById('preview-cell');
+
+  if (pos === null) {
+    previewEl.style.display = 'none';
+    return;
+  }
+
+  const { x, y } = pixelPos(pos.r, pos.c);
+  previewEl.style.transform = `translate(${x}px, ${y}px)`;
+  previewEl.style.display = 'flex';
+}
+
+/* updateScoreDisplay()
+   - 점수 텍스트를 화면에 반영 */
+function updateScoreDisplay() {
+  document.getElementById('score').textContent = score;
+}
+
+/* =========================================================
+   입력 처리
+   1) 키보드 방향키 (테스트/데스크탑 편의용)
+   2) 터치 스와이프 (모바일 대응)
+========================================================= */
+
+document.addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'ArrowUp':    move('up');    break;
+    case 'ArrowDown':  move('down');  break;
+    case 'ArrowLeft':  move('left');  break;
+    case 'ArrowRight': move('right'); break;
+  }
+});
+
+let touchStartX = 0;
+let touchStartY = 0;
+const SWIPE_THRESHOLD = 30; // 최소 스와이프 거리(px)
+
+document.addEventListener('touchstart', (e) => {
+  const touch = e.changedTouches[0];
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+  const touch = e.changedTouches[0];
+  const dx = touch.clientX - touchStartX;
+  const dy = touch.clientY - touchStartY;
+
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_THRESHOLD) {
+    return;
+  }
+
+  if (Math.abs(dx) > Math.abs(dy)) {
+    move(dx > 0 ? 'right' : 'left');
+  } else {
+    move(dy > 0 ? 'down' : 'up');
+  }
+}, { passive: true });
+
+/* =========================================================
+   startGame()
+   - "게임 시작" 버튼 클릭 시 호출된다.
+   - 시작(규칙 안내) 화면을 숨기고 게임 화면을 보여준 뒤
+   - 보드를 초기화하여 실제 플레이를 시작한다.
+========================================================= */
+function startGame() {
+  document.getElementById('start-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+
+  gameStarted = true;
+  initBoard();
+}
+
+/* =========================================================
+   restartGame()
+   - "다시 시작" 버튼 클릭 시 호출된다.
+   - 진행 중이던 애니메이션 시퀀스를 모두 무효화(moveToken 증가)한 뒤
+   - 보드/점수/DOM을 모두 초기화하고 새 게임을 시작한다.
+========================================================= */
+function restartGame() {
+  moveToken += 1;   // 예약되어 있던 setTimeout 콜백들을 모두 무효화
+  isAnimating = false;
+  initBoard();
+}
+</script>
+
+</body>
+</html>
